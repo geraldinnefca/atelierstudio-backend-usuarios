@@ -1,32 +1,41 @@
 package com.atelierstudio.backend_usuarios.config;
 
-import com.atelierstudio.backend_usuarios.model.Usuario;
-import com.atelierstudio.backend_usuarios.repository.UsuarioRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configuration.WebSecurityCustomizer;
-import org.springframework.security.core.authority.AuthorityUtils;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
 public class SecurityConfig {
 
+    @Autowired
+    private JwtRequestFilter jwtRequestFilter;
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
+                .cors(Customizer.withDefaults()) // Permite fetch desde React
+                .httpBasic(basic -> basic.disable())
+                .formLogin(form -> form.disable())
+                .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS)) // Todo sin sesión (modo JWT)
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
@@ -34,13 +43,32 @@ public class SecurityConfig {
                                 "/v3/api-docs/**",
                                 "/doc/**"
                         ).permitAll()
-                        // Las pantallas React no envían Basic Auth: el CRUD calza con fetch directo.
-                        .requestMatchers("/api/usuarios/**").permitAll()
+
+                        // Permitir Login
+                        .requestMatchers("/api/v1/auth/login").permitAll()
+
+                        // Permitir Registro de usuarios nuevos
+                        .requestMatchers(HttpMethod.POST, "/api/usuarios").permitAll()
+
+                        // Proteger el resto de las rutas
                         .anyRequest().authenticated()
                 )
-                .httpBasic(Customizer.withDefaults());
+                // Agregar nuestro filtro JWT ANTES de que intente pedir usuario/clave normal
+                .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOriginPatterns(List.of("*"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
     }
 
     @Bean
@@ -50,26 +78,5 @@ public class SecurityConfig {
                 "/swagger-ui/**",
                 "/swagger-ui.html"
         );
-    }
-
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
-    }
-
-    @Bean
-    public UserDetailsService userDetailsService(UsuarioRepository repository) {
-        return correo -> {
-            Usuario usuario = repository.findByCorreo(correo.trim().toLowerCase())
-                    .orElseThrow(() -> new UsernameNotFoundException("Usuario no encontrado con correo: " + correo));
-
-            String rolFinal = "ROLE_" + usuario.getRol().toUpperCase().trim().replace("ROLE_", "");
-
-            return new User(
-                    usuario.getCorreo(),
-                    usuario.getContrasena(),
-                    AuthorityUtils.createAuthorityList(rolFinal)
-            );
-        };
     }
 }
